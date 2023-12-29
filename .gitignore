@@ -2,8 +2,6 @@
 # Edit at https://www.toptal.com/developers/gitignore?templates=python
 
 # Custom
-data/
-data/
 results/
 *.pdf
 .DS_Store
