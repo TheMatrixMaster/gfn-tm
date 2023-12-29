@@ -13,6 +13,7 @@ class LDA_Gibbs(LDA):
     rng: np.random.Generator    # random number generator
     patience: int               # number of iterations to wait for convergence
     eval_every: int             # evaluate model every eval_every iterations
+    save_samples: bool          # whether to save the samples from the sampler
 
     def __init__(
             self,
@@ -59,7 +60,7 @@ class LDA_Gibbs(LDA):
                 self.n_kw[i, tok_id] += 1
                 self.n_dk[d, i] += 1
 
-    def fit(self, verbose=True, eval=True) -> [float]:
+    def fit(self, verbose=True, eval=True) -> ([float], [float], [float]):
         """
         Run collapsed Gibbs sampling
 
@@ -73,7 +74,6 @@ class LDA_Gibbs(LDA):
         # initialize required variables
         self._init_gibbs()
         patience = self.patience
-        tok_docs = tokenize_docs(self.docs, self.vocab)
         hi = -np.inf
         ll = []
         tc = []
@@ -122,7 +122,7 @@ class LDA_Gibbs(LDA):
                 print("Evaluating the model...")
                 ll.append(self.loglikelihood())
                 phi = self.get_phi()
-                tc.append(compute_topic_coherence(phi, tok_docs, self.r_vocab, k=10))
+                tc.append(compute_topic_coherence(phi, self.tok_docs, self.r_vocab, k=10))
                 td.append(compute_topic_diversity(phi, k=25))
 
                 print(f"Log likelihood: {ll[-1]}, Topic quality: {tc[-1]*td[-1]}")

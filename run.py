@@ -7,15 +7,19 @@ Usage:
 
     python run.py --dataset MIMIC-III --model LDA --inference_method gibbs --K 8 --n_iter 500 --save_samples
     python run.py --dataset MIMIC-III --model LDA --inference_method gibbs --K 8 --n_iter 500 --sorted --save_samples
+
+    python run.py --dataset eICU --model LDA --inference_method gfn --K 8 --n_iter 10000 --sorted --dataset_size 0.1
 """
 
 import os
 import pickle
 from datetime import datetime
+import torch
 import numpy as np
 import pandas as pd
 from argparse import ArgumentParser
 from models.lda_gibbs import LDA_Gibbs
+from models.lda_gfn import LDA_GFN
 from utils.dataset import eICUDataset, mimicDataset
 from utils.metrics import tokenize_docs, top_k_docs
 
@@ -24,6 +28,7 @@ DEFAULT_SEED = 34
 def main(args):
     seed = args.seed if args.seed != 0 else DEFAULT_SEED
     rng = np.random.default_rng(seed)
+    torch.manual_seed(seed)
 
     # load the dataset
     if args.dataset == "eICU":
@@ -71,12 +76,25 @@ def main(args):
             save_samples=args.save_samples,
             eval_every=1,
         )
+    elif args.model == "LDA" and args.inference_method == "gfn":
+        model = LDA_GFN(
+            K=args.K,
+            alpha=0.1,
+            beta=0.01,
+            docs=train_docs,
+            vocab=dataset.vocab,
+            r_vocab=dataset.r_vocab,
+            n_iter=args.n_iter,    
+            save_samples=args.save_samples,    
+            eval_every=100,
+        )
     else:
         raise NotImplementedError
     
     # fit the model
     ll, tc, td = model.fit(verbose=True, eval=True)
 
+    """
     # make results folder
     folder = f"results/{args.dataset}_{args.model}_{args.inference_method}_{seed}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     os.makedirs(folder, exist_ok=True)
@@ -143,6 +161,7 @@ def main(args):
 
         with open(f"{folder}/test_docs.pkl", "wb") as f:
             pickle.dump(tok_docs, f)
+    """
 
 
 if __name__ == "__main__":

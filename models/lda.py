@@ -3,24 +3,37 @@ Baseline class for training an LDA model. This class only implements the generat
 model and does not include any inference methods. The class is meant to be extended
 by other classes that implement inference methods such as Gibbs sampling, variational
 expectation maximization or gflownets.
+
+TODO: revamp using pytorch distributions and remove gibbs counts stuff n_dk, n_kw, etc.
 """
 
+import torch
+import torch.distributions as dist
+from torchtyping import TensorType as TT
 import numpy as np
 from tqdm import tqdm
 from utils.dataset import make_vocab
+from utils.metrics import tokenize_docs
 from collections import defaultdict
+
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class LDA:
     K: int              # number of topics
     V: int              # number of words in vocabulary
     D: int              # number of documents
-    n_wd: np.ndarray    # 2d array holding word counts for each document (BOW)
+    n_dw: TT["D", "V"]  # 2d tensor holding word counts for each document (BOW)
     n_dk: np.ndarray    # 2d array holding topic counts for each document
     n_kw: np.ndarray    # 2d array holding word counts for each topic
     alphas: np.ndarray  # dirichlet prior params for topic mixture per document with shape (K,)
     betas: np.ndarray   # dirichlet prior params for word mixture per topic with shape (V,)
 
+    theta_prior: dist.Dirichlet
+    phi_prior: dist.Dirichlet
+
     docs: [[str]]       # list of documents, each being a sequence of unprocessed tokens
+    tok_docs: [[int]]   # list of tokenized documents, each being a sequence of token ids
     vocab: defaultdict  # vocabulary dict mapping words to unique index identifier
     r_vocab: [str]      # reverse vocabulary list where index of word is their identifier
 
@@ -30,7 +43,7 @@ class LDA:
             docs: [[str]],
             vocab: defaultdict=None,
             r_vocab: [str]=None,
-            alphas=None,
+            alpha=0.1,
             beta=1e-3
     ) -> None:
         self.K = K
@@ -42,14 +55,18 @@ class LDA:
         else:
             self.vocab, self.r_vocab = vocab, r_vocab
 
+        self.tok_docs = tokenize_docs(docs, self.vocab)
         self.V = len(self.r_vocab)
         
-        self.n_wd = np.zeros((self.V, self.D), dtype=int)   # might not need this
+        self.n_dw = self.fill_counts(docs)
         self.n_dk = np.zeros((self.D, self.K), dtype=int)
         self.n_kw = np.zeros((self.K, self.V), dtype=int)
 
-        self.alphas = np.ones(K, dtype=float) if alphas is None else alphas
+        self.alphas = np.repeat(alpha, self.K)
         self.betas = np.repeat(beta, self.V)
+
+        self.theta_prior = dist.Dirichlet(torch.tensor(self.alphas, device=device, dtype=torch.float32))
+        self.phi_prior = dist.Dirichlet(torch.tensor(self.betas, device=device, dtype=torch.float32))
     
     def fit(self) -> None:
         """
@@ -64,6 +81,17 @@ class LDA:
         the data likelihood convergences to some maxima
         """
         pass
+
+    def fill_counts(self, docs: [[str]]) -> TT["D", "V"]:
+        """
+        Fills the counts for the current documents in self.docs
+        """
+        n_dw = torch.zeros((self.D, self.V), dtype=int, device=device)
+        for d in range(len(docs)):
+            for w in range(len(docs[d])):
+                tok_id = self.vocab[docs[d][w]]
+                n_dw[d, tok_id] += 1
+        return n_dw
 
     def _conditional_prob(self, d, w, n_dk=None, docs=None) -> np.ndarray:
         """
