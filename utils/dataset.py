@@ -4,6 +4,9 @@ Loads dataset and preprocesses it
 
 import os
 from typing import Optional
+from pandas.core.api import DataFrame as DataFrame
+import torch
+import torch.distributions as dist
 import pandas as pd
 import numpy as np
 from collections import defaultdict
@@ -44,7 +47,7 @@ class Dataset:
     def __init__(self, path: str, target_paths: [str], sorted=True, rng=None) -> None:
         self.rng = rng if rng else np.random.default_rng()
         self.docs, self.doc_ids = self.load_documents(path, sorted=sorted)
-        self.vocab, self.r_vocab = make_vocab(docs=self.docs)
+        self.vocab, self.r_vocab = self.make_vocab(docs=self.docs)
         self.D = len(self.docs)
         self.V = len(self.r_vocab)
         self.doc_targets = self.load_targets(paths=target_paths) if target_paths else None
@@ -61,6 +64,20 @@ class Dataset:
             doc_ids: list of document ids
         """
         pass
+
+    def make_vocab(self, docs: [[str]]) -> (defaultdict, [str]):
+        """
+        Takes in a list of documents and creates a vocabulary dictionary
+        mapping raw tokens to their unique integer identifier
+
+        Parameters:
+            docs: a list of documents, each a sequence of raw tokens
+
+        Returns:
+            vocab: a dictionary mapping raw tokens to a unique integer identifier
+            r_vocab: a list that positions the unique word at their unique id/index
+        """
+        return make_vocab(docs=docs)
 
     def load_targets(self, paths: [str]) -> pd.DataFrame:
         """
@@ -240,3 +257,65 @@ class mimicDataset(Dataset):
         docs = df["ICD9_CODE"].tolist()
 
         return docs, doc_ids
+    
+    def load_targets(self, paths: [str]) -> DataFrame:
+         # Keep codes with only numbers
+        codes = pd.read_csv(paths[0], index_col=0, header=0).dropna()
+        mask = codes['ICD9_CODE'].str.contains('[a-zA-Z]')
+        codes = codes[~mask]
+        codes['ICD9_CODE'] = codes['ICD9_CODE'].astype(int)
+        codes.set_index('ICD9_CODE', inplace=True)
+        codes = codes[codes.index.isin(self.vocab.keys())]
+        codes.sort_index(inplace=True)
+        codes = codes[~codes.index.duplicated(keep='first')]
+        return codes['ICD9_CODE'].to_dict()
+
+
+class syntheticDataset(Dataset):
+    def __init__(
+        self,
+        K: int = 3,
+        V: int = 100,
+        D: int = 256,
+        doc_length: int = 16,
+        alpha: float = 0.1,
+        beta: float = 0.1,
+        **kwargs
+    ) -> None:
+        self.K = K
+        self.D = D
+        self.V = V
+        self.alpha = alpha
+        self.beta = beta
+        self.doc_length = doc_length
+        self.theta_prior = dist.Dirichlet(torch.full((K,), alpha))
+        self.phi_prior = dist.Dirichlet(torch.full((V,), beta))
+        super().__init__(path=None, target_paths=None, **kwargs)
+
+    def load_documents(self, path: str, sorted=True) -> ([[str]], [int]):
+        topic_word = self.phi_prior.sample((self.K,))
+        doc_topic = self.theta_prior.sample((self.D,))
+        self.theta = doc_topic.log().clone()
+        self.phi = topic_word.log().clone()
+        dists = torch.matmul(doc_topic, topic_word)
+
+        self.docs = []
+        self.doc_ids = []
+
+        for i in range(self.D):
+            doc = []
+            for j in range(self.doc_length):
+                word = dist.Categorical(dists[i]).sample()
+                doc.append(str(word.item()))
+            self.docs.append(doc)
+            self.doc_ids.append(i)
+
+        return self.docs, self.doc_ids
+
+    def make_vocab(self, docs: [[str]]) -> (defaultdict, [str]):
+        vocab = [str(i) for i in range(self.V)]
+        r_vocab = vocab
+        return dict(zip(vocab, range(self.V))), r_vocab
+
+    def load_targets(self, paths: [str]) -> pd.DataFrame:
+        pass

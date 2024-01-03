@@ -2,10 +2,14 @@
 Implementation of LDA with Gibbs sampling inference
 """
 
+import torch
 import numpy as np
 from models.lda import LDA
 from tqdm import tqdm
 from utils.metrics import compute_topic_diversity, compute_topic_coherence, tokenize_docs
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 class LDA_Gibbs(LDA):
     n_iter: int                 # max number of iterations to run gibbs
@@ -120,8 +124,11 @@ class LDA_Gibbs(LDA):
             # evaluate log likelihood with current parameters
             if eval & ((t+1) % self.eval_every == 0):
                 print("Evaluating the model...")
-                ll.append(self.loglikelihood())
-                phi = self.get_phi()
+                phi, theta = self.get_topic_mixtures()
+                phi_ = torch.tensor(phi, device=device)
+                theta_ = torch.tensor(theta, device=device)
+                cll = self.loglikelihood(theta_, phi_, self.n_dw).cpu().mean().item()
+                ll.append(cll)
                 tc.append(compute_topic_coherence(phi, self.tok_docs, self.r_vocab, k=10))
                 td.append(compute_topic_diversity(phi, k=25))
 
@@ -153,6 +160,7 @@ class LDA_Gibbs(LDA):
         the data likelihood convergences to some maxima
         """
         D = len(docs)
+        n_dw = self.fill_counts(docs)
         n_dk = np.zeros((D, self.K), dtype=int)
         n_iter = self.n_iter if n_iter is None else n_iter
         max_doc_length = max([len(doc) for doc in docs])
@@ -205,7 +213,11 @@ class LDA_Gibbs(LDA):
                         assign[d, w, (t+1)%2] = i_tp1
 
             # evaluate log likelihood with current parameters
-            ll.append(self.loglikelihood(n_dk=n_dk, docs=docs, verbose=False))
+            phi, theta = self.get_topic_mixtures(n_dk=n_dk)
+            phi_ = torch.tensor(phi, device=device)
+            theta_ = torch.tensor(theta, device=device)
+            cll = self.loglikelihood(theta_, phi_, n_dw).cpu().mean().item()
+            ll.append(cll)
             print(f"Log likelihood: {ll[-1]}")
 
             if patience is None:

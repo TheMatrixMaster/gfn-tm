@@ -17,6 +17,8 @@ from metrics import top_k_docs
 # Load plotting style
 # plt.rcParams.update(bundles.neurips2023())
 
+plot_format = 'png'
+
 
 def plot_topic_document_correlation(doc_ids: List[int], theta: np.ndarray, save_path=None) -> None:
     """
@@ -33,7 +35,7 @@ def plot_topic_document_correlation(doc_ids: List[int], theta: np.ndarray, save_
     plt.title('Topic-document correlation matrix')
 
     if save_path is not None:
-        plt.savefig(save_path, bbox_inches='tight', dpi=300, format='pdf')
+        plt.savefig(save_path, bbox_inches='tight', dpi=300, format=plot_format)
     else:
         plt.show()
 
@@ -82,7 +84,7 @@ def heatmap_topic_samples(assign: np.ndarray, tok_doc: [int], r_vocab, num_topic
     colorbar.set_ticklabels(topic_labels)
 
     if save_path is not None:
-        plt.savefig(save_path, bbox_inches='tight', dpi=300, format='pdf')
+        plt.savefig(save_path, bbox_inches='tight', dpi=300, format=plot_format)
     else:
         plt.show()
 
@@ -103,7 +105,7 @@ def plot_topic_coherence(coherence: [float], save_path=None) -> None:
     plt.ylabel('Topic coherence')
 
     if save_path is not None:
-        plt.savefig(save_path, bbox_inches='tight', dpi=300, format='pdf')
+        plt.savefig(save_path, bbox_inches='tight', dpi=300, format=plot_format)
     else:
         plt.show()
 
@@ -124,7 +126,7 @@ def plot_topic_diversity(diversity: [float], save_path=None) -> None:
     plt.ylabel('Topic diversity')
 
     if save_path is not None:
-        plt.savefig(save_path, bbox_inches='tight', dpi=300, format='pdf')
+        plt.savefig(save_path, bbox_inches='tight', dpi=300, format=plot_format)
     else:
         plt.show()
 
@@ -147,7 +149,7 @@ def plot_topic_quality(coherence: [float], diversity: [float], save_path=None) -
     plt.ylabel('Topic quality')
 
     if save_path is not None:
-        plt.savefig(save_path, bbox_inches='tight', dpi=300, format='pdf')
+        plt.savefig(save_path, bbox_inches='tight', dpi=300, format=plot_format)
     else:
         plt.show()
 
@@ -168,7 +170,7 @@ def plot_log_likelihood(ll: [float], save_path=None) -> None:
     plt.ylabel('Log likelihood')
 
     if save_path is not None:
-        plt.savefig(save_path, bbox_inches='tight', dpi=300, format='pdf')
+        plt.savefig(save_path, bbox_inches='tight', dpi=300, format=plot_format)
     else:
         plt.show()
 
@@ -205,7 +207,7 @@ def plot_top_words_by_topic(phi: np.ndarray, r_vocab: [str], n=10, save_path=Non
         tick.set_rotation(90)
 
     if save_path is not None:
-        plt.savefig(save_path, bbox_inches='tight', dpi=300, format='pdf')
+        plt.savefig(save_path, bbox_inches='tight', dpi=300, format=plot_format)
     else:
         plt.show()
 
@@ -243,7 +245,7 @@ def plot_top_docs(theta: np.ndarray, n=100, save_path=None) -> None:
         tick.set_rotation(90)
 
     if save_path is not None:
-        plt.savefig(save_path, bbox_inches='tight', dpi=300, format='pdf')
+        plt.savefig(save_path, bbox_inches='tight', dpi=300, format=plot_format)
     else:
         plt.show()
 
@@ -251,7 +253,7 @@ def plot_top_docs(theta: np.ndarray, n=100, save_path=None) -> None:
 
 
 if __name__ == "__main__":
-    folder = "results/eICU_LDA_gibbs_34_2023-12-22_00-54-11"
+    folder = "results/eICU_LDA_gfn_34_2023-12-31_02-58-26"
 
     ll = np.load(f"{folder}/ll.npy")
     tc = np.load(f"{folder}/tc.npy")
@@ -259,10 +261,10 @@ if __name__ == "__main__":
     phi = pd.read_csv(f"{folder}/phi.csv", index_col=0)
     theta = pd.read_csv(f"{folder}/theta.csv", index_col=0)
 
-    samples = np.load(f"{folder}/samples.npy")
-    samples_ids = np.load(f"{folder}/samples_ids.npy")
-    with open(f"{folder}/docs.pkl", "rb") as f:
-        tok_docs = pickle.load(f)
+    # samples = np.load(f"{folder}/samples.npy")
+    # samples_ids = np.load(f"{folder}/samples_ids.npy")
+    # with open(f"{folder}/docs.pkl", "rb") as f:
+    #     tok_docs = pickle.load(f)
 
     num_topics = theta.shape[1]
     r_vocab = list(phi.columns)
@@ -271,39 +273,38 @@ if __name__ == "__main__":
     phi = phi.to_numpy()
     theta = theta.to_numpy()
 
-    plot_log_likelihood(ll, save_path=f"{folder}/train_ll.pdf")
-    plot_topic_quality(tc, td, save_path=f"{folder}/train_topic_quality.pdf")
-    plot_topic_coherence(tc, save_path=f"{folder}/train_topic_coherence.pdf")
-    plot_topic_diversity(td, save_path=f"{folder}/train_topic_diversity.pdf")
+    plot_log_likelihood(ll, save_path=f"{folder}/train_ll.{plot_format}")
+    plot_topic_quality(tc, td, save_path=f"{folder}/train_topic_quality.{plot_format}")
+    plot_topic_coherence(tc, save_path=f"{folder}/train_topic_coherence.{plot_format}")
+    plot_topic_diversity(td, save_path=f"{folder}/train_topic_diversity.{plot_format}")
+    plot_top_words_by_topic(phi, r_vocab, save_path=f"{folder}/train_top_words.{plot_format}")
+
+    # for topic, (sample, doc_id, tok_doc) in enumerate(zip(samples, samples_ids, tok_docs)):
+    #     sample = sample[:len(tok_doc), :]
+    #     assert np.all(sample != -1), "Sample contains -1 values"
+    #     heatmap_topic_samples(sample, tok_doc, r_vocab, num_topics, save_path=f"{folder}/train_topic_{topic}_samples_doc_{doc_id}.pdf")
+
+    # test_ll = np.load(f"{folder}/test_ll.npy")
+    # test_ppl = np.loadtxt(f"{folder}/test_ppl.txt")
+    # test_theta = pd.read_csv(f"{folder}/test_theta.csv", index_col=0)
+
+    # test_samples = np.load(f"{folder}/test_samples.npy")
+    # test_samples_ids = np.load(f"{folder}/test_samples_ids.npy")
+    # with open(f"{folder}/test_docs.pkl", "rb") as f:
+    #     test_tok_docs = pickle.load(f)
+
+    # test_theta = test_theta.to_numpy()
+    # num_topics = test_theta.shape[1]
+
+    # print(f"Test perplexity: {test_ppl}")
     
-    plot_top_words_by_topic(phi, r_vocab, save_path=f"{folder}/train_top_words.pdf")
+    # plot_log_likelihood(test_ll, save_path=f"{folder}/test_ll.pdf")
 
-    for topic, (sample, doc_id, tok_doc) in enumerate(zip(samples, samples_ids, tok_docs)):
-        sample = sample[:len(tok_doc), :]
-        assert np.all(sample != -1), "Sample contains -1 values"
-        heatmap_topic_samples(sample, tok_doc, r_vocab, num_topics, save_path=f"{folder}/train_topic_{topic}_samples_doc_{doc_id}.pdf")
-
-    test_ll = np.load(f"{folder}/test_ll.npy")
-    test_ppl = np.loadtxt(f"{folder}/test_ppl.txt")
-    test_theta = pd.read_csv(f"{folder}/test_theta.csv", index_col=0)
-
-    test_samples = np.load(f"{folder}/test_samples.npy")
-    test_samples_ids = np.load(f"{folder}/test_samples_ids.npy")
-    with open(f"{folder}/test_docs.pkl", "rb") as f:
-        test_tok_docs = pickle.load(f)
-
-    test_theta = test_theta.to_numpy()
-    num_topics = test_theta.shape[1]
-
-    print(f"Test perplexity: {test_ppl}")
-    
-    plot_log_likelihood(test_ll, save_path=f"{folder}/test_ll.pdf")
-
-    for topic, (sample, doc_id, tok_doc) in enumerate(zip(test_samples, test_samples_ids, test_tok_docs)):
-        sample = sample[:len(tok_doc), :]
-        sample = sample[sample != -1]
-        assert np.all(sample != -1), "Sample contains -1 values"
-        try:
-            heatmap_topic_samples(sample, tok_doc, r_vocab, num_topics, save_path=f"{folder}/test_topic_{topic}_samples_doc_{doc_id}.pdf")
-        except:
-            print(f"Error plotting topic {topic} samples for document {doc_id}")
+    # for topic, (sample, doc_id, tok_doc) in enumerate(zip(test_samples, test_samples_ids, test_tok_docs)):
+    #     sample = sample[:len(tok_doc), :]
+    #     sample = sample[sample != -1]
+    #     assert np.all(sample != -1), "Sample contains -1 values"
+    #     try:
+    #         heatmap_topic_samples(sample, tok_doc, r_vocab, num_topics, save_path=f"{folder}/test_topic_{topic}_samples_doc_{doc_id}.pdf")
+    #     except:
+    #         print(f"Error plotting topic {topic} samples for document {doc_id}")

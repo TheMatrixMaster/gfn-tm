@@ -86,7 +86,8 @@ class LDA:
         """
         Fills the counts for the current documents in self.docs
         """
-        n_dw = torch.zeros((self.D, self.V), dtype=int, device=device)
+        D = len(docs)
+        n_dw = torch.zeros((D, self.V), dtype=int, device=device)
         for d in range(len(docs)):
             for w in range(len(docs[d])):
                 tok_id = self.vocab[docs[d][w]]
@@ -124,19 +125,21 @@ class LDA:
         
         return probs / probs.sum()
     
-    def loglikelihood(self, n_dk=None, docs: [[str]]=None, verbose=True) -> float:
+    def loglikelihood(
+        self,
+        theta: TT["num_docs", "K"],
+        phi: TT["K", "V"],
+        n_dw: TT["num_docs", "V"],
+    ) -> TT["num_docs"]:
         """
-        Calculate complete log likelihood of the dataset under the current model
+        Estimate the joint log likelihood of the data (word count matrix n_wd) and the
+        topic assignments z_d for each document d in the batch using the current model
+        parameters phi and theta.
         """
-        phi, theta = self.get_topic_mixtures(n_dk=n_dk)
-        docs = self.docs if docs is None else docs
-        ll = 0.0
-        for d in tqdm(range(len(docs)), disable=not verbose):
-            for w in range(len(docs[d])):
-                tok_id = self.vocab[docs[d][w]]
-                ll += np.log(np.dot(phi[:, tok_id], theta[d, :]))
-
-        return ll
+        lp = self.theta_prior.log_prob(theta)
+        lpw = theta @ phi
+        ll = (lpw.log() * n_dw).sum(dim=1)
+        return lp + ll
     
     def get_phi(self) -> np.ndarray:
         """

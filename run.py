@@ -9,18 +9,24 @@ Usage:
     python run.py --dataset MIMIC-III --model LDA --inference_method gibbs --K 8 --n_iter 500 --sorted --save_samples
 
     python run.py --dataset eICU --model LDA --inference_method gfn --K 8 --n_iter 10000 --sorted --dataset_size 0.1
+    python run.py --dataset MIMIC-III --model LDA --inference_method gfn --K 8 --n_iter 10000 --sorted
+
+    python run.py --dataset synthetic --model LDA --inference_method gfn --K 3 --n_iter 10000 --testset_size 0
+    python run.py --dataset synthetic --model LDA --inference_method gibbs --K 3 --n_iter 10000 --testset_size 0
 """
 
+import sys
 import os
 import pickle
 from datetime import datetime
+import matplotlib.pyplot as plt
 import torch
 import numpy as np
 import pandas as pd
 from argparse import ArgumentParser
 from models.lda_gibbs import LDA_Gibbs
 from models.lda_gfn import LDA_GFN
-from utils.dataset import eICUDataset, mimicDataset
+from utils.dataset import eICUDataset, mimicDataset, syntheticDataset
 from utils.metrics import tokenize_docs, top_k_docs
 
 DEFAULT_SEED = 34
@@ -50,6 +56,15 @@ def main(args):
             sorted=args.sorted,
             rng=rng
         )
+    elif args.dataset == "synthetic":
+        dataset = syntheticDataset(
+            K=3,
+            D=256,
+            V=100,
+            alpha=0.1,
+            beta=0.01,
+            doc_length=16,
+        )
     else:
         raise NotImplementedError
     
@@ -68,6 +83,8 @@ def main(args):
         model = LDA_Gibbs(
             rng=rng,
             K=args.K,
+            alpha=0.1,
+            beta=0.01,
             docs=train_docs,
             vocab=dataset.vocab,
             r_vocab=dataset.r_vocab,
@@ -80,13 +97,20 @@ def main(args):
         model = LDA_GFN(
             K=args.K,
             alpha=0.1,
-            beta=0.01,
+            beta=0.1,
             docs=train_docs,
             vocab=dataset.vocab,
             r_vocab=dataset.r_vocab,
-            n_iter=args.n_iter,    
-            save_samples=args.save_samples,    
-            eval_every=100,
+            n_iter=args.n_iter,
+            save_samples=args.save_samples,
+            phi_step_threshold=1.,
+            gfn_lr=0.001,
+            phi_lr=0.01,
+            Z_lr=0.1,
+            # n_mixture_components=4,
+            # n_hidden_layers=3,
+            # hidden_dim=32,
+            eval_every=1,
         )
     else:
         raise NotImplementedError
@@ -94,25 +118,82 @@ def main(args):
     # fit the model
     ll, tc, td = model.fit(verbose=True, eval=True)
 
+    # # make results folder
+    # folder = f"results/{args.dataset}_{args.model}_{args.inference_method}_{seed}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    # os.makedirs(folder, exist_ok=True)
+
+    # # save the topic mixtures and metrics
+    # phi, theta = model.get_topic_mixtures()
+    # topic_names = [f"topic_{i}" for i in range(model.K)]
+
+    # phi_df = pd.DataFrame(phi, columns=model.r_vocab, index=topic_names)
+    # phi_df.to_csv(f"{folder}/phi.csv")
+
+    # theta_df = pd.DataFrame(theta, columns=topic_names, index=train_ids)
+    # theta_df.to_csv(f"{folder}/theta.csv")
+
+    # np.save(f"{folder}/ll.npy", ll)
+    # np.save(f"{folder}/tc.npy", tc)
+    # np.save(f"{folder}/td.npy", td)
+
+    with torch.no_grad():
+        for iter in range(3):
+            i = np.random.randint(256)
+            doc_ = model.n_dw[i:i+1].repeat(256,1)
+
+            plt.figure(figsize=(6,3))
+            plt.subplot(121)
+            plt.title('sampled posterior')
+
+            theta, logPF, logPB = model.policy.sample_trajectories(doc_)
+            logR = model.loglikelihood(theta,model.phi,doc_)
+
+            plt.scatter((theta[:,0]+theta[:,1]/2).cpu(), (theta[:,1]*np.sqrt(3)/2).cpu(),s=2)
+            plt.scatter([0,0.5,1],[0,np.sqrt(3)/2,0])
+
+            plt.subplot(122)
+            plt.title('true posterior')
+
+            # importance sampling num_docsx100
+            theta_samples = dataset.theta_prior.sample((256*100,)).to('cuda')
+            logR = model.loglikelihood(theta_samples,model.phi,doc_.repeat(100,1))
+            theta_idx = torch.distributions.Categorical(logits=logR).sample((256,))
+            best_thetas = theta_samples[theta_idx]
+
+            plt.scatter((best_thetas[:,0]+best_thetas[:,1]/2).cpu(), (best_thetas[:,1]*np.sqrt(3)/2).cpu(),s=2)
+            plt.scatter([0,0.5,1],[0,np.sqrt(3)/2,0])
+            plt.savefig(f'./results/test-synthetic-theta-doc-{iter}.png')
+
+        # test phi
+        plt.figure(figsize=(15,3), facecolor='white')
+
+        plt.subplot(211)
+        plt.title('Inferred with GFN')
+        plt.imshow(model.phi.log_softmax(1).cpu().numpy(),vmax=-1,vmin=-5,cmap='Blues')
+        plt.xticks([])
+        plt.yticks([])
+        plt.xlabel('vocab')
+        plt.ylabel('topic')
+
+        plt.subplot(212)
+        plt.title('Ground truth')
+        plt.imshow(dataset.phi.log_softmax(1).cpu().numpy(),vmax=-1,vmin=-5,cmap='Blues')
+        plt.xticks([])
+        plt.yticks([])
+        plt.xlabel('vocab')
+        plt.ylabel('topic')
+        plt.savefig(f'./results/test-synthetic-phi.png')
+        
+        for mat in [ model.phi.softmax(1), dataset.phi.softmax(1) ]:
+            for i in range(dataset.K):
+                print(i)
+                print(*mat[i].topk(10).indices.cpu().numpy())
+    #             for v,n in zip(*mat[i].topk(10)):
+    #                 print(n.item(),v.item())
+
+            print()
+
     """
-    # make results folder
-    folder = f"results/{args.dataset}_{args.model}_{args.inference_method}_{seed}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-    os.makedirs(folder, exist_ok=True)
-
-    # save the topic mixtures and metrics
-    phi, theta = model.get_topic_mixtures()
-    topic_names = [f"topic_{i}" for i in range(model.K)]
-
-    phi_df = pd.DataFrame(phi, columns=model.r_vocab, index=topic_names)
-    phi_df.to_csv(f"{folder}/phi.csv")
-
-    theta_df = pd.DataFrame(theta, columns=topic_names, index=train_ids)
-    theta_df.to_csv(f"{folder}/theta.csv")
-
-    np.save(f"{folder}/ll.npy", ll)
-    np.save(f"{folder}/tc.npy", tc)
-    np.save(f"{folder}/td.npy", td)
-
     # save only the samples for the top document for each topic
     # also save the document tokens for the top document for each topic
     if args.save_samples:
@@ -171,7 +252,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset",
         type=str,
-        choices=["eICU", "MIMIC-III"],
+        choices=["eICU", "MIMIC-III", "synthetic"],
         default="eICU",
         help="dataset to use"
     )
