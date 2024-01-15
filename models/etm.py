@@ -1,19 +1,26 @@
 """@thematrixmaster
-Baseline class for training an ETM model. This class only implements the generative 
-model and does not include any inference methods. The class is meant to be extended
-by other classes that implement inference methods such as Gibbs sampling, variational
-expectation maximization or gflownets.
+Baseline class for training an ETM model with a Logistic Normal prior over \theta.
 """
 
 import torch
+from torchtyping import TensorType as TT
 import torch.nn.functional as F 
 from torch import nn
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class ETM(nn.Module):
-    def __init__(self, num_topics, vocab_size, t_hidden_size, rho_size,
-                    theta_act, embeddings=None, train_embeddings=True, enc_drop=0.5):
+    def __init__(
+        self,
+        num_topics: int,                    # number of topics
+        vocab_size: int,                    # size of vocabulary
+        t_hidden_size: int,                 # size of hidden layer in encoder
+        rho_size: int,                      # num of dimensions in word embedding
+        theta_act: str,                     # activation function for theta encoder
+        embeddings: TT["V", "L"] = None,    # pre-trained word embeddings
+        train_embeddings: bool = True,      # whether to train word embeddings from scratch
+        enc_drop=0.5                        # dropout rate for encoder
+    ):
         super(ETM, self).__init__()
 
         ## define hyperparameters
@@ -24,30 +31,32 @@ class ETM(nn.Module):
         self.enc_drop = enc_drop
         self.t_drop = nn.Dropout(enc_drop)
 
+        assert theta_act in ['tanh', 'relu', 'softplus', 'rrelu', 'leakyrelu', 'elu', 'selu', 'glu'], \
+            'theta_act should be in "tanh, relu, softplus, rrelu, leakyrelu, elu, selu, glu"'
+        
         self.theta_act = self.get_activation(theta_act)
 
-        self.train_embeddings = train_embeddings        
-        
-        ## define the word embedding matrix \rho
+        ## define the V x L word embedding matrix \rho
+        self.train_embeddings = train_embeddings
         if self.train_embeddings:
-            self.rho = nn.Parameter(torch.randn(vocab_size, rho_size)) # V x L
+            self.rho = nn.Parameter(torch.randn(vocab_size, rho_size))
         else:
-            self.rho = embeddings.clone().float().to(device) # V x L
+            self.rho = embeddings.clone().float().to(device)
 
-        ## define the matrix containing the topic embeddings
-        self.alphas = nn.Linear(rho_size, num_topics, bias=False)#nn.Parameter(torch.randn(rho_size, num_topics))
+        ## define the K x L topic embedding matrix \alpha
+        self.alphas = nn.Linear(rho_size, num_topics, bias=False)
     
-        ## define variational distribution for \theta_{1:D} via amortizartion
+        ## define the encoder that outputs variational parameters for \theta conditioned on x
         self.q_theta = nn.Sequential(
-                nn.Linear(vocab_size, t_hidden_size), 
-                self.theta_act,
-                nn.Linear(t_hidden_size, t_hidden_size),
-                self.theta_act,
-            )
+            nn.Linear(vocab_size, t_hidden_size), 
+            self.theta_act,
+            nn.Linear(t_hidden_size, t_hidden_size),
+            self.theta_act,
+        )
         self.mu_q_theta = nn.Linear(t_hidden_size, num_topics, bias=True)
         self.logsigma_q_theta = nn.Linear(t_hidden_size, num_topics, bias=True)
 
-    def get_activation(self, act):
+    def get_activation(self, act: str):
         if act == 'tanh':
             act = nn.Tanh()
         elif act == 'relu':
@@ -93,7 +102,7 @@ class ETM(nn.Module):
         mu_theta = self.mu_q_theta(q_theta)
         logsigma_theta = self.logsigma_q_theta(q_theta)
 
-        # KL[q(theta)||p(theta)] = lnq(theta) - lnp(theta)
+        # KL[q(theta) || p(theta)] = lnq(theta) - lnp(theta)
         kl_theta = -0.5 * torch.sum(1 + logsigma_theta - mu_theta.pow(2) - logsigma_theta.exp(), dim=-1).mean()
         return mu_theta, logsigma_theta, kl_theta
 

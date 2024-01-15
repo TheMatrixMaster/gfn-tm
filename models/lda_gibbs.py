@@ -6,7 +6,11 @@ import torch
 import numpy as np
 from models.lda import LDA
 from tqdm import tqdm
-from utils.metrics import compute_topic_diversity, compute_topic_coherence, tokenize_docs
+from utils.metrics import (
+    compute_topic_diversity,
+    compute_topic_coherence,
+    tokenize_docs
+)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -132,7 +136,12 @@ class LDA_Gibbs(LDA):
                 tc.append(compute_topic_coherence(phi, self.tok_docs, self.r_vocab, k=10))
                 td.append(compute_topic_diversity(phi, k=25))
 
-                print(f"Log likelihood: {ll[-1]}, Topic quality: {tc[-1]*td[-1]}")
+                print(f"""
+                    Log likelihood: {ll[-1]},
+                    Topic quality: {tc[-1]*td[-1]},
+                    Topic coherence: {tc[-1]},
+                    Topic diversity: {td[-1]}
+                    """)
 
                 if self.patience is None:
                     continue

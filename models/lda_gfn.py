@@ -97,29 +97,11 @@ class GFlowNet_EM(nn.Module):
         self.uniform_pb = uniform_pb
         self.model = NeuralNet(
             input_dim=2*K+1+self.context_dim,
-            output_dim=K*(2+3*n_mixture_components),
+            output_dim=K*(2+3*n_mixture_components+1),
             hidden_dim=hidden_dim,
             n_hidden_layers=n_hidden_layers,
             activation_fn=activation_fn
         )
-        self.logZ = nn.Parameter(torch.tensor(init_logZ), requires_grad=True)
-
-    def get_opt_params(self, lr=1e-3, Z_lr=0.1) -> [dict]:
-        """Gets the parameters to optimize for the gflownet policy"""
-        params = [{
-            "params": [
-                v for k, v in dict(self.named_parameters()).items() if k != "logZ"
-            ],
-            "lr": lr,
-        }]
-
-        if Z_lr > 0:
-            params.append({
-                "params": [dict(self.named_parameters())["logZ"]],
-                "lr": Z_lr,
-            })
-
-        return params
 
     def forward(
         self,
@@ -130,7 +112,8 @@ class GFlowNet_EM(nn.Module):
     ) -> (
         TT["num_docs", "K"],
         TT["num_docs", "K"],
-        TT["num_docs", "K", "n_mixture_components", 3]
+        TT["num_docs", "K", "n_mixture_components", 3],
+        TT["num_docs"]
     ):
         """
         Samples a batch of transitions
@@ -146,6 +129,7 @@ class GFlowNet_EM(nn.Module):
             pf_logits: logits for the forwards policy Pf(s_t|s_{t-1})
             pf_mixture_params: logits and beta dist parameters (alpha, beta) for 
                                 all K*M mixture components
+            logZ: the flow normalizing constant
         """
         x = torch.concat([theta, theta_mask, remaining.unsqueeze(1), context], dim=1)
         x = self.model(x)
@@ -159,7 +143,7 @@ class GFlowNet_EM(nn.Module):
         pf_mixture_params = x[:, 2*self.K:self.K*(2+3*self.n_mixture_components)]
         pf_mixture_params = pf_mixture_params.view(-1, self.K, self.n_mixture_components, 3)
 
-        return pb_logits, pf_logits, pf_mixture_params
+        return pb_logits, pf_logits, pf_mixture_params, x[:, -1]
     
     def sample_trajectories(
         self,
@@ -168,6 +152,7 @@ class GFlowNet_EM(nn.Module):
         epsilon: float = 0.,
     ) -> (
         TT["num_docs", "K"],
+        TT["num_docs"],
         TT["num_docs"],
         TT["num_docs"]
     ):
@@ -193,11 +178,15 @@ class GFlowNet_EM(nn.Module):
 
         for step in range(self.K+1):
 
-            pb_logits, pf_logits, pf_mixture_params = self.forward(
+            pb_logits, pf_logits, pf_mixture_params, log_flow = self.forward(
                 theta, theta_mask, remaining, context
             )
 
-            if step > 0:
+            if step == 0:
+                # we use the first step estimate for the flow normalizing constant Z
+                # since conditional gfn have different normalizing constants for each conditional flow
+                logZ = log_flow
+            elif step > 0:
                 # we gather the backwards transition probabilities from the parent 
                 # positions chosen in the previous step into the logPB estimate
                 logPB += pb_logits.gather(1, cur_topic_idx).squeeze(1)
@@ -287,7 +276,7 @@ class GFlowNet_EM(nn.Module):
                 # Update the set mask
                 theta_mask.scatter_(1, cur_topic_idx, torch.ones(num_docs,1).to(device))
         
-        return theta, logPF, logPB
+        return theta, logPF, logPB, logZ
     
 
 class LDA_GFN(LDA):
@@ -323,7 +312,6 @@ class LDA_GFN(LDA):
         activation_fn="elu",
         gfn_lr=1e-4,
         phi_lr=1e-4,
-        Z_lr=0.1,
         **kwargs,
     ) -> None:
         super().__init__(K=K, docs=docs, **kwargs)
@@ -344,8 +332,7 @@ class LDA_GFN(LDA):
         ).to(device)
 
         # initialize the optimizer for the gflownet policy and the word-topic mixture
-        params = self.policy.get_opt_params(lr=gfn_lr, Z_lr=Z_lr)
-        self.gfn_optimizer = optim.Adam(params, betas=(0.9, 0.999))
+        self.gfn_optimizer = optim.Adam(self.policy.parameters(), betas=(0.9, 0.999))
         self.phi_optimizer = optim.Adam([self.phi], lr=phi_lr, betas=(0.9, 0.999))
 
     def loglikelihood(
@@ -392,12 +379,12 @@ class LDA_GFN(LDA):
         for it in range(self.n_iter):
             # E-step
             for _ in range(100):
-                theta, logPF, logPB = self.policy.sample_trajectories(self.n_dw, epsilon=0.1)
+                theta, logPF, logPB, logZ = self.policy.sample_trajectories(self.n_dw, epsilon=0.1)
                 logR = self.loglikelihood(theta, self.phi, self.n_dw)
                 self.gfn_optimizer.zero_grad()
                 
                 # step on TB loss with respect to the gfn policy parameters
-                loss = ((self.policy.logZ + logPF - logR - logPB)**2).mean()
+                loss = ((logZ + logPF - logR - logPB)**2).mean()
                 loss.backward()
                 self.gfn_optimizer.step()
                 
@@ -447,7 +434,7 @@ class LDA_GFN(LDA):
                     log-rewards={np.array(log_rewards[-self.eval_every:]).mean()},
                     max-reward={np.max(log_rewards[-self.eval_every:])},
                     update-ratio={np.array(updates[-self.eval_every:]).mean()},
-                    logZ={self.policy.logZ.item()},
+                    logZ={logZ.mean().item()},
                     topic-coherence={tc[-1]},
                     topic-diversity={td[-1]}
                 """)

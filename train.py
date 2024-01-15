@@ -2,17 +2,7 @@
 Main runner file to train and test different topic model
 
 Usage:
-    python run.py --dataset eICU --model LDA --inference_method gibbs --K 8 --n_iter 200 --save_samples --dataset_size 0.1
-    python run.py --dataset eICU --model LDA --inference_method gibbs --K 8 --n_iter 200 --sorted --save_samples --dataset_size 0.1
 
-    python run.py --dataset MIMIC-III --model LDA --inference_method gibbs --K 8 --n_iter 500 --save_samples
-    python run.py --dataset MIMIC-III --model LDA --inference_method gibbs --K 8 --n_iter 500 --sorted --save_samples
-
-    python run.py --dataset eICU --model LDA --inference_method gfn --K 8 --n_iter 10000 --sorted --dataset_size 0.1
-    python run.py --dataset MIMIC-III --model LDA --inference_method gfn --K 8 --n_iter 10000 --sorted
-
-    python run.py --dataset synthetic --model LDA --inference_method gfn --K 3 --n_iter 10000 --testset_size 0
-    python run.py --dataset synthetic --model LDA --inference_method gibbs --K 3 --n_iter 10000 --testset_size 0
 """
 
 import sys
@@ -26,7 +16,6 @@ import pandas as pd
 from argparse import ArgumentParser
 from models.lda_gibbs import LDA_Gibbs
 from models.lda_gfn import LDA_GFN
-from models.etm import ETM
 from utils.dataset import eICUDataset, mimicDataset, syntheticDataset
 from utils.metrics import tokenize_docs, top_k_docs
 
@@ -112,17 +101,6 @@ def main(args):
             # n_hidden_layers=3,
             # hidden_dim=32,
             eval_every=1,
-        )
-    elif args.model == "ETM":
-        model = ETM(
-            num_topics=args.K,
-            vocab_size=len(dataset.vocab),
-            rho_size=300,
-            t_hidden_size=800,
-            enc_drop=0.0,
-            theta_act='relu',
-            embeddings=None,
-            train_embeddings=True,
         )
     else:
         raise NotImplementedError

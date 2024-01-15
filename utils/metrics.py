@@ -4,6 +4,7 @@ Compute metrics for evaluating topic models
 
 import numpy as np
 
+
 def tokenize_docs(docs: [[str]], vocab: {str: int}) -> [[int]]:
     """
     Tokenizes a list of documents into a list of lists of tokens
@@ -17,6 +18,7 @@ def tokenize_docs(docs: [[str]], vocab: {str: int}) -> [[int]]:
     """
     return [[vocab[word] for word in doc] for doc in docs]
 
+
 def top_k_words(phi: np.ndarray, r_vocab: {int: str}, k: int=10):
     """
     Returns the top k words for each topic using phi which 
@@ -26,6 +28,7 @@ def top_k_words(phi: np.ndarray, r_vocab: {int: str}, k: int=10):
     topk = np.argsort(phi, axis=1)[:, -k:]
     return [[(r_vocab[i], i) for i in row] for row in topk]
 
+
 def top_k_docs(theta: np.ndarray, doc_ids: [int], k: int=10):
     """
     Returns the top k documents for each topic using theta which
@@ -34,6 +37,12 @@ def top_k_docs(theta: np.ndarray, doc_ids: [int], k: int=10):
     """
     topk = np.argsort(theta, axis=0)[-k:, :]
     return [[(doc_ids[i], i) for i in row] for row in topk]
+
+
+def nearest_neighbors(model, word):
+    nearest_neighbors = model.wv.most_similar(word, topn=20)
+    nearest_neighbors = [comp[0] for comp in nearest_neighbors]
+    return nearest_neighbors
     
 
 def compute_topic_diversity(phi: np.ndarray, k: int=25):
@@ -46,6 +55,7 @@ def compute_topic_diversity(phi: np.ndarray, k: int=25):
     unique = np.unique(topk)
     return len(unique) / (phi.shape[0] * k)
 
+
 def normalized_mutual_information(w_i: int, w_j: int, docs: [[int]]):
     """
     Computes the normalized mutual information between two words $w_i$ and $w_j$
@@ -57,12 +67,14 @@ def normalized_mutual_information(w_i: int, w_j: int, docs: [[int]]):
     same document, and $P(w_i)$ and $P(w_j)$ are the probabilities of $w_i$ and $w_j$
     appearing in any document.
     """
-    P_wi = np.sum([w_i in doc for doc in docs]) / len(docs)
-    P_wj = np.sum([w_j in doc for doc in docs]) / len(docs)
-    P_wi_wj = np.sum([(w_i in doc and w_j in doc) for doc in docs]) / len(docs)
-    if P_wi_wj == 0:
-        return 0
-    return np.log(P_wi_wj / (P_wi * P_wj)) / -np.log(P_wi_wj)
+    D = len(docs)
+    N_wi = np.sum([w_i in doc for doc in docs])
+    N_wj = np.sum([w_j in doc for doc in docs])
+    N_wi_wj = np.sum([(w_i in doc and w_j in doc) for doc in docs])
+    if N_wi_wj == 0:
+        return -1
+    return -1 + (np.log(N_wi) + np.log(N_wj) - 2 * np.log(D)) / (np.log(N_wi_wj) - np.log(D))
+
 
 def compute_topic_coherence(phi: np.ndarray, docs: [[int]], r_vocab: {int: str}, k: int=10):
     """
@@ -74,14 +86,15 @@ def compute_topic_coherence(phi: np.ndarray, docs: [[int]], r_vocab: {int: str},
     TC = \frac{1}{K}\sum_{k=1}^{K}\frac{1}{45}\sum_{i=1}^{10}\sum_{j=1}^{10} f(w_i^{(k)}, w_j^{(k)})
     $$
     """
+    num_topics = phi.shape[0]
     topk = top_k_words(phi, r_vocab, k)
     tc = 0
-    for i in range(phi.shape[0]):
-        topic = topk[i]
-        for j in range(k):
-            for l in range(j+1, k):
-                tc += normalized_mutual_information(topic[j][1], topic[l][1], docs)
+    for i in range(num_topics):
+        top_words = topk[i]
+        for j in range(len(top_words)):
+            for l in range(j+1, len(top_words)):
+                tc += normalized_mutual_information(top_words[j][1], top_words[l][1], docs)
 
-        tc /= 45
-    return tc / k
+    norm = (k * (k-1)) / 2
+    return tc / (num_topics * norm)
     
