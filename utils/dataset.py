@@ -3,13 +3,20 @@ Loads dataset and preprocesses it
 """
 
 import os
-from typing import Optional
-from pandas.core.api import DataFrame as DataFrame
+import pickle
 import torch
-import torch.distributions as dist
-import pandas as pd
 import numpy as np
+import pandas as pd
+from typing import Optional
+
+import torch.nn as nn
+import torch.distributions as dist
+
 from collections import defaultdict
+from pandas.core.api import DataFrame as DataFrame
+from torch.utils.data import Dataset as TorchDataset
+
+from scipy.io import loadmat
 
 
 def make_vocab(docs: [[str]]) -> (defaultdict, [str]):
@@ -238,7 +245,7 @@ class eICUDataset(Dataset):
         return targets
     
 
-class mimicDataset(Dataset):
+class MimicDataset(Dataset):
     def __init__(self, path: str, target_paths: [str], **kwargs) -> None:
         super().__init__(path, target_paths, **kwargs)
 
@@ -271,7 +278,7 @@ class mimicDataset(Dataset):
         return codes['ICD9_CODE'].to_dict()
 
 
-class syntheticDataset(Dataset):
+class SyntheticDataset(Dataset):
     def __init__(
         self,
         K: int = 3,
@@ -318,4 +325,68 @@ class syntheticDataset(Dataset):
         return dict(zip(vocab, range(self.V))), r_vocab
 
     def load_targets(self, paths: [str]) -> pd.DataFrame:
+        pass
+
+
+class _20ngDataset(Dataset):
+    embeddings: np.ndarray
+    rho_size: int
+
+    def __init__(
+        self,
+        path: str,
+        target_paths: [str],
+        embeddings_path: str,
+        rho_size: int,
+        **kwargs
+    ) -> None:
+        # Load embeddings which is a text file with each line being a word followed by its embedding
+        self.rho_size = rho_size
+        self.vocab, self.r_vocab = self.make_vocab(path)
+        self.V = len(self.r_vocab)
+        self.embeddings = self.load_embeddings(embeddings_path)
+        self.bow, self.bow_ids = self.load_documents(path, sorted=sorted)
+        self.D = {ds: len(self.bow_ids[ds]) for ds in self.bow_ids.keys()}
+        self.doc_targets = self.load_targets(paths=target_paths) if target_paths else None
+
+    def make_vocab(self, path: str) -> (defaultdict, [str]):
+        with open(f"{path}/vocab.pkl", "rb") as f:
+            r_vocab = pickle.load(f)
+        vocab = dict(zip(r_vocab, range(len(r_vocab))))
+        return vocab, r_vocab
+    
+    def load_embeddings(self, path: str) -> np.ndarray:
+        embeddings = np.zeros((self.V, self.rho_size), dtype=np.float32)
+        with open(path, "rb") as f:
+            for line in f:
+                word, *vec = line.split()
+                word = word.decode("utf-8")
+                assert word in self.vocab, f"Word {word} not in vocabulary"
+                vec = np.array(vec, dtype=np.float32)
+                embeddings[self.vocab[word]] = vec
+        return np.array(embeddings)
+
+    def load_documents(self, path: str, sorted: bool):
+        data = {}
+        data_ids = {}
+        for ds in ["tr", "va", "ts_h1", "ts_h2"]:
+            bow_counts = loadmat(f"{path}/bow_{ds}_counts.mat")["counts"].squeeze()
+            bow_tokens = loadmat(f"{path}/bow_{ds}_tokens.mat")["tokens"].squeeze()
+            bow = np.zeros((bow_counts.shape[0], self.V))
+
+            for doc_idx, doc in enumerate(bow_tokens):
+                for widx, word_id in enumerate(doc):
+                    bow[doc_idx, word_id] = bow_counts[doc_idx][widx]
+
+            bow_normalized = bow / bow.sum(axis=1, keepdims=True)
+
+            data[ds] = bow
+            data[f"{ds}_normalized"] = bow_normalized
+            data_ids[ds] = np.arange(bow.shape[0])
+        return data, data_ids
+    
+    def train_test_split(self, full_size=1, test_size: float = 0.2, shuffle=True):
+        return self.bow['tr'], self.bow_ids['tr'], self.bow['va'], self.bow_ids['va']
+    
+    def load_targets(self, paths: [str]) -> DataFrame:
         pass

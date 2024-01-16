@@ -8,6 +8,8 @@ results/
 test.ipynb
 test.py
 gfn-lda.ipynb
+*.txt
+data/20ng/min_df_10
 
 ### Python ###
 # Byte-compiled / optimized / DLL files

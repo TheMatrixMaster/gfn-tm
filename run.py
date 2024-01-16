@@ -13,6 +13,8 @@ Usage:
 
     python run.py --dataset synthetic --model LDA --inference_method gfn --K 3 --n_iter 10000 --testset_size 0
     python run.py --dataset synthetic --model LDA --inference_method gibbs --K 3 --n_iter 10000 --testset_size 0
+
+    python run.py --dataset 20ng --model LDA --inference_method gibbs --K 20 --n_iter 1000 --save_samples --dataset_size 0.1    
 """
 
 import sys
@@ -27,7 +29,12 @@ from argparse import ArgumentParser
 from models.lda_gibbs import LDA_Gibbs
 from models.lda_gfn import LDA_GFN
 from models.etm import ETM
-from utils.dataset import eICUDataset, mimicDataset, syntheticDataset
+from utils.dataset import (
+    eICUDataset,
+    MimicDataset,
+    SyntheticDataset,
+    _20ngDataset,
+)
 from utils.metrics import tokenize_docs, top_k_docs
 
 DEFAULT_SEED = 34
@@ -51,20 +58,29 @@ def main(args):
             rng=rng
         )
     elif args.dataset == "MIMIC-III":
-        dataset = mimicDataset(
+        dataset = MimicDataset(
             path="data/mimic3/MIMIC3_DIAGNOSES_ICD_subset.csv.gz",
             target_paths=None,
             sorted=args.sorted,
             rng=rng
         )
     elif args.dataset == "synthetic":
-        dataset = syntheticDataset(
+        dataset = SyntheticDataset(
             K=3,
             D=256,
             V=100,
             alpha=0.1,
             beta=0.01,
             doc_length=16,
+        )
+    elif args.dataset == "20ng":
+        dataset = _20ngDataset(
+            path="data/20ng/min_df_10",
+            target_paths=None,
+            embeddings_path="data/20ng/embeddings.txt",
+            rho_size=300,
+            sorted=args.sorted,
+            rng=rng
         )
     else:
         raise NotImplementedError
@@ -116,19 +132,29 @@ def main(args):
     elif args.model == "ETM":
         model = ETM(
             num_topics=args.K,
-            vocab_size=len(dataset.vocab),
             rho_size=300,
             t_hidden_size=800,
             enc_drop=0.0,
             theta_act='relu',
-            embeddings=None,
-            train_embeddings=True,
+            embeddings=torch.from_numpy(dataset.embeddings).float(),
+            train_embeddings=False,
+            clip=0.0,
+            batch_size=1000,
+            vocab=dataset.vocab,
+            r_vocab=dataset.r_vocab,
+            vocab_size=len(dataset.vocab),
+        )
+        model.get_optimizer('adam', lr=0.005, wdecay=1.2e-6)
+        model_params = (
+            torch.from_numpy(dataset.bow['tr']).float(),
+            torch.from_numpy(dataset.bow['tr_normalized']).float(),
+            5
         )
     else:
         raise NotImplementedError
     
     # fit the model
-    ll, tc, td = model.fit(verbose=True, eval=True)
+    ll, tc, td = model.fit(*model_params)
 
     # # make results folder
     # folder = f"results/{args.dataset}_{args.model}_{args.inference_method}_{seed}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
@@ -264,7 +290,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset",
         type=str,
-        choices=["eICU", "MIMIC-III", "synthetic"],
+        choices=["eICU", "MIMIC-III", "synthetic", "20ng"],
         default="eICU",
         help="dataset to use"
     )
