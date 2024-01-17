@@ -33,11 +33,12 @@ class ETM(nn.Module):
         batch_size: int = 1000,             # batch size of documents
         vocab: defaultdict(int) = None,     # vocabulary dictionary mapping words to indices
         r_vocab: [str] = None,              # reverse vocabulary list where index of word is their identifier
+        patience: int = 10                  # number of bad hits allowed
     ):
         super(ETM, self).__init__()
 
         ## define hyperparameters
-        self.num_topics = num_topics
+        self.K = num_topics
         self.vocab_size = vocab_size
         self.t_hidden_size = t_hidden_size
         self.rho_size = rho_size
@@ -47,6 +48,7 @@ class ETM(nn.Module):
         self.batch_size = batch_size
         self.vocab = vocab
         self.r_vocab = r_vocab
+        self.patience = patience
 
         assert theta_act in ['tanh', 'relu', 'softplus', 'rrelu', 'leakyrelu', 'elu', 'selu', 'glu'], \
             'theta_act should be in "tanh, relu, softplus, rrelu, leakyrelu, elu, selu, glu"'
@@ -135,6 +137,15 @@ class ETM(nn.Module):
         theta = F.softmax(z, dim=-1)
         return theta, kld_theta
 
+    def get_topic_mixtures(self, normalized_bows: TT["B", "V"]):
+        ## get topic proportions for the entire corpus
+        theta, _ = self.get_theta(normalized_bows)
+        beta = self.get_beta()
+        return (
+            beta.detach().cpu().numpy(),
+            theta.detach().cpu().numpy(),
+        )
+
     def decode(self, theta: TT["B", "K"], beta: TT["K", "V"]) -> TT["B", "V"]:
         ## returns the reconstructed distribution of words for a batch of documents
         res = torch.mm(theta, beta)
@@ -202,8 +213,17 @@ class ETM(nn.Module):
         self.optimizer.step()
         return recon_loss.item(), kld_theta.item()
     
-    def fit(self, X: TT["D", "V"], X_normalized: TT["D", "V"], num_epochs: int):
+    def fit(
+        self,
+        X: TT["D", "V"],
+        X_normalized: TT["D", "V"],
+        X_test_1: TT["T", "V"],
+        X_test_2: TT["T", "V"],
+        num_epochs: int=25,
+    ):
         nelbo, tc, td = [], [], []
+        all_val_ppl = []
+        best_val_ppl = np.inf
 
         num_docs = X.shape[0]
         assert num_docs > self.batch_size, "num_docs should be greater than batch_size"
@@ -213,29 +233,44 @@ class ETM(nn.Module):
 
             ## get a new permutation of the training data
             batch_indices = torch.randperm(num_docs).split(self.batch_size)
-
-            for idx, batch_idx in tqdm(enumerate(batch_indices)):
+    
+            for idx, batch_idx in tqdm(enumerate(batch_indices), total=len(batch_indices)):
                 batch = (X[batch_idx, :], X_normalized[batch_idx, :])
                 recon_loss, kld_theta = self.train_one_batch(batch)
 
                 nelbo.append(recon_loss + kld_theta)
 
-                # TODO: consider bow representation
                 beta = self.get_beta().detach().cpu().numpy()
-                tc.append(compute_topic_coherence(beta, X, self.r_vocab))
+                tc.append(compute_topic_coherence(beta, X.detach().cpu().numpy(), self.r_vocab, is_bow=True))
                 td.append(compute_topic_diversity(beta))
+
+            ## evaluate on held-out perplexity
+            val_ppl, val_tc, val_td = self.infer(X_test_1, X_test_2)
+            all_val_ppl.append(val_ppl)
+
+            if val_ppl < best_val_ppl:
+                best_val_ppl = val_ppl
+                torch.save(self.state_dict(), 'best_model.pt')
+            else:
+                lr = self.optimizer.param_groups[0]['lr']
+                if (len(all_val_ppl) > self.patience and val_ppl > min(all_val_ppl[:-self.patience]) and lr > 1e-5):
+                    self.optimizer.param_groups[0]['lr'] /= 4
 
             print(f"""
                 Epoch: {epoch+1}/{num_epochs},
                 negative ELBO: {nelbo[-1]},
                 Topic quality: {tc[-1]*td[-1]},
                 Topic coherence: {tc[-1]},
-                Topic diversity: {td[-1]}
+                Topic diversity: {td[-1]},
+                Val Perplexity: {val_ppl},
+                Val Topic quality: {val_tc*val_td},
+                Val Topic coherence: {val_tc},
+                Val Topic diversity: {val_td},
             """)
 
         return nelbo, tc, td
     
-    def infer(self, X_1: TT["D", "V"], X_2: TT["D", "V"], batch_size: int=200, bow_norm: bool=True):
+    def infer(self, X_1: TT["D", "V"], X_2: TT["D", "V"], batch_size: int=1000, bow_norm: bool=True):
         """
         Compute perplexity on document completion by fitting on X_1, then predicting on X_2.
         """
@@ -271,7 +306,8 @@ class ETM(nn.Module):
             ppl_dc = round(np.exp(cur_loss), 1)
 
             beta = beta.data.cpu().numpy()
-            tc = compute_topic_coherence(beta, X_1+X_2, self.r_vocab)
+            X = X_1.detach().cpu().numpy()+X_2.detach().cpu().numpy()
+            tc = compute_topic_coherence(beta, X, self.r_vocab, is_bow=True)
             td = compute_topic_diversity(beta, 25)
             return ppl_dc, tc, td
             

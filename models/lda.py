@@ -43,6 +43,7 @@ class LDA:
             docs: [[str]],
             vocab: defaultdict=None,
             r_vocab: [str]=None,
+            is_bow: bool=False,
             alpha=0.1,
             beta=1e-3
     ) -> None:
@@ -55,10 +56,15 @@ class LDA:
         else:
             self.vocab, self.r_vocab = vocab, r_vocab
 
-        self.tok_docs = tokenize_docs(docs, self.vocab)
         self.V = len(self.r_vocab)
-        
-        self.n_dw = self.fill_counts(docs)
+
+        if is_bow:
+            self.n_dw = docs
+            self.tok_docs = None
+        else:
+            self.tok_docs = tokenize_docs(docs, self.vocab)
+            self.n_dw = self.fill_counts(docs)
+
         self.n_dk = np.zeros((self.D, self.K), dtype=int)
         self.n_kw = np.zeros((self.K, self.V), dtype=int)
 

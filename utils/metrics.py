@@ -2,7 +2,9 @@
 Compute metrics for evaluating topic models
 """
 
+import torch
 import numpy as np
+from functools import cache
 
 
 def tokenize_docs(docs: [[str]], vocab: {str: int}) -> [[int]]:
@@ -56,7 +58,26 @@ def compute_topic_diversity(phi: np.ndarray, k: int=25):
     return len(unique) / (phi.shape[0] * k)
 
 
-def normalized_mutual_information(w_i: int, w_j: int, docs: [[int]]):
+# @cache
+def count_word_occurrences(w_i, docs: [[int]], is_bow: bool=False):
+    """
+    Counts the number of documents that contain the word $w_i$
+    """
+    if is_bow:
+        return np.sum(docs[:, w_i] > 0)
+    else:
+        return np.sum([w_i in doc for doc in docs])
+
+def count_words_cooccurrences(w_i: int, w_j: int, docs: [[int]], is_bow: bool=False):
+    """
+    Counts the number of documents that contain both words $w_i$ and $w_j$
+    """
+    if is_bow:
+        return np.minimum(docs[:, w_i], docs[:, w_j]).sum()
+    else:
+        return np.sum([(w_i in doc and w_j in doc) for doc in docs])
+
+def normalized_mutual_information(w_i: int, w_j: int, docs: [[int]], is_bow: bool=False):
     """
     Computes the normalized mutual information between two words $w_i$ and $w_j$
     drawn randomly from the same document with the following formula:
@@ -68,15 +89,15 @@ def normalized_mutual_information(w_i: int, w_j: int, docs: [[int]]):
     appearing in any document.
     """
     D = len(docs)
-    N_wi = np.sum([w_i in doc for doc in docs])
-    N_wj = np.sum([w_j in doc for doc in docs])
-    N_wi_wj = np.sum([(w_i in doc and w_j in doc) for doc in docs])
+    N_wi = count_word_occurrences(w_i, docs, is_bow=is_bow)
+    N_wj = count_word_occurrences(w_j, docs, is_bow=is_bow)
+    N_wi_wj = count_words_cooccurrences(w_i, w_j, docs, is_bow=is_bow)
     if N_wi_wj == 0:
         return -1
     return -1 + (np.log(N_wi) + np.log(N_wj) - 2 * np.log(D)) / (np.log(N_wi_wj) - np.log(D))
 
 
-def compute_topic_coherence(phi: np.ndarray, docs: [[int]], r_vocab: {int: str}, k: int=10):
+def compute_topic_coherence(phi: np.ndarray, docs: [[int]], r_vocab: {int: str}, k: int=10, is_bow: bool=False):
     """
     We measure topic quality according to [ETM Blei et al.] by taking the product of 
     topic coherence and topic diversity. Topic coherence is a quantitative measure of 
@@ -89,11 +110,12 @@ def compute_topic_coherence(phi: np.ndarray, docs: [[int]], r_vocab: {int: str},
     num_topics = phi.shape[0]
     topk = top_k_words(phi, r_vocab, k)
     tc = 0
+
     for i in range(num_topics):
         top_words = topk[i]
         for j in range(len(top_words)):
             for l in range(j+1, len(top_words)):
-                tc += normalized_mutual_information(top_words[j][1], top_words[l][1], docs)
+                tc += normalized_mutual_information(top_words[j][1], top_words[l][1], docs, is_bow)
 
     norm = (k * (k-1)) / 2
     return tc / (num_topics * norm)

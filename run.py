@@ -27,6 +27,7 @@ import numpy as np
 import pandas as pd
 from argparse import ArgumentParser
 from models.lda_gibbs import LDA_Gibbs
+from models.lda_gibbs_c import LDA_Gibbs_C
 from models.lda_gfn import LDA_GFN
 from models.etm import ETM
 from utils.dataset import (
@@ -97,19 +98,18 @@ def main(args):
     
     # initialize the model
     if args.model == "LDA" and args.inference_method == "gibbs":
-        model = LDA_Gibbs(
-            rng=rng,
+        model = LDA_Gibbs_C(
+            rng=seed,
             K=args.K,
             alpha=0.1,
             beta=0.01,
+            is_bow=True,
             docs=train_docs,
             vocab=dataset.vocab,
             r_vocab=dataset.r_vocab,
             n_iter=args.n_iter,
-            patience=args.patience,
-            save_samples=args.save_samples,
-            eval_every=1,
         )
+        model_params = (dataset.bow['tr'].astype(np.int64),)
     elif args.model == "LDA" and args.inference_method == "gfn":
         model = LDA_GFN(
             K=args.K,
@@ -124,20 +124,18 @@ def main(args):
             gfn_lr=0.001,
             phi_lr=0.01,
             Z_lr=0.1,
-            # n_mixture_components=4,
-            # n_hidden_layers=3,
-            # hidden_dim=32,
             eval_every=1,
         )
-    elif args.model == "ETM":
+    elif args.model == "ETM" and args.inference_method == "variational":
         model = ETM(
             num_topics=args.K,
             rho_size=300,
             t_hidden_size=800,
-            enc_drop=0.0,
+            enc_drop=0.5,
             theta_act='relu',
-            embeddings=torch.from_numpy(dataset.embeddings).float(),
-            train_embeddings=False,
+            # embeddings=torch.from_numpy(dataset.embeddings).float(),
+            embeddings=None,
+            train_embeddings=True,
             clip=0.0,
             batch_size=1000,
             vocab=dataset.vocab,
@@ -145,91 +143,40 @@ def main(args):
             vocab_size=len(dataset.vocab),
         )
         model.get_optimizer('adam', lr=0.005, wdecay=1.2e-6)
-        model_params = (
-            torch.from_numpy(dataset.bow['tr']).float(),
-            torch.from_numpy(dataset.bow['tr_normalized']).float(),
-            5
-        )
+        bow = torch.from_numpy(dataset.bow['tr']).float()
+        bow_normalized = torch.from_numpy(dataset.bow['tr_normalized']).float()
+        bow_ts_h1 = torch.from_numpy(dataset.bow['ts_h1']).float()
+        bow_ts_h2 = torch.from_numpy(dataset.bow['ts_h2']).float()
+        model_params = (bow, bow_normalized, bow_ts_h1, bow_ts_h2, args.n_iter)
     else:
         raise NotImplementedError
     
     # fit the model
     ll, tc, td = model.fit(*model_params)
 
-    # # make results folder
-    # folder = f"results/{args.dataset}_{args.model}_{args.inference_method}_{seed}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-    # os.makedirs(folder, exist_ok=True)
+    # print(ll)
+    # print('topic coherence: ', tc)
+    # print('topic diversity: ', td)
 
-    # # save the topic mixtures and metrics
-    # phi, theta = model.get_topic_mixtures()
-    # topic_names = [f"topic_{i}" for i in range(model.K)]
+    # raise ValueError
 
-    # phi_df = pd.DataFrame(phi, columns=model.r_vocab, index=topic_names)
-    # phi_df.to_csv(f"{folder}/phi.csv")
+    # make results folder
+    folder = f"results/{args.dataset}_{args.model}_{args.inference_method}_{seed}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    os.makedirs(folder, exist_ok=True)
 
-    # theta_df = pd.DataFrame(theta, columns=topic_names, index=train_ids)
-    # theta_df.to_csv(f"{folder}/theta.csv")
+    # save the topic mixtures and metrics
+    phi, theta = model.get_topic_mixtures(torch.from_numpy(dataset.bow['tr_normalized']).float())
+    topic_names = [f"topic_{i}" for i in range(model.K)]
 
-    # np.save(f"{folder}/ll.npy", ll)
-    # np.save(f"{folder}/tc.npy", tc)
-    # np.save(f"{folder}/td.npy", td)
+    phi_df = pd.DataFrame(phi, columns=model.r_vocab, index=topic_names)
+    phi_df.to_csv(f"{folder}/phi.csv")
 
-    with torch.no_grad():
-        for iter in range(3):
-            i = np.random.randint(256)
-            doc_ = model.n_dw[i:i+1].repeat(256,1)
+    theta_df = pd.DataFrame(theta, columns=topic_names, index=train_ids)
+    theta_df.to_csv(f"{folder}/theta.csv")
 
-            plt.figure(figsize=(6,3))
-            plt.subplot(121)
-            plt.title('sampled posterior')
-
-            theta, logPF, logPB = model.policy.sample_trajectories(doc_)
-            logR = model.loglikelihood(theta,model.phi,doc_)
-
-            plt.scatter((theta[:,0]+theta[:,1]/2).cpu(), (theta[:,1]*np.sqrt(3)/2).cpu(),s=2)
-            plt.scatter([0,0.5,1],[0,np.sqrt(3)/2,0])
-
-            plt.subplot(122)
-            plt.title('true posterior')
-
-            # importance sampling num_docsx100
-            theta_samples = dataset.theta_prior.sample((256*100,)).to('cuda')
-            logR = model.loglikelihood(theta_samples,model.phi,doc_.repeat(100,1))
-            theta_idx = torch.distributions.Categorical(logits=logR).sample((256,))
-            best_thetas = theta_samples[theta_idx]
-
-            plt.scatter((best_thetas[:,0]+best_thetas[:,1]/2).cpu(), (best_thetas[:,1]*np.sqrt(3)/2).cpu(),s=2)
-            plt.scatter([0,0.5,1],[0,np.sqrt(3)/2,0])
-            plt.savefig(f'./results/test-synthetic-theta-doc-{iter}.png')
-
-        # test phi
-        plt.figure(figsize=(15,3), facecolor='white')
-
-        plt.subplot(211)
-        plt.title('Inferred with GFN')
-        plt.imshow(model.phi.log_softmax(1).cpu().numpy(),vmax=-1,vmin=-5,cmap='Blues')
-        plt.xticks([])
-        plt.yticks([])
-        plt.xlabel('vocab')
-        plt.ylabel('topic')
-
-        plt.subplot(212)
-        plt.title('Ground truth')
-        plt.imshow(dataset.phi.log_softmax(1).cpu().numpy(),vmax=-1,vmin=-5,cmap='Blues')
-        plt.xticks([])
-        plt.yticks([])
-        plt.xlabel('vocab')
-        plt.ylabel('topic')
-        plt.savefig(f'./results/test-synthetic-phi.png')
-        
-        for mat in [ model.phi.softmax(1), dataset.phi.softmax(1) ]:
-            for i in range(dataset.K):
-                print(i)
-                print(*mat[i].topk(10).indices.cpu().numpy())
-    #             for v,n in zip(*mat[i].topk(10)):
-    #                 print(n.item(),v.item())
-
-            print()
+    np.save(f"{folder}/ll.npy", ll)
+    np.save(f"{folder}/tc.npy", tc)
+    np.save(f"{folder}/td.npy", td)
 
     """
     # save only the samples for the top document for each topic

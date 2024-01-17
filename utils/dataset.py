@@ -386,7 +386,7 @@ class _20ngDataset(Dataset):
         return data, data_ids
     
     def train_test_split(self, full_size=1, test_size: float = 0.2, shuffle=True):
-        return self.bow['tr'], self.bow_ids['tr'], self.bow['va'], self.bow_ids['va']
+        return self.bow_ids['tr'], self.bow_ids['va'], self.bow['tr'], self.bow['va']
     
     def load_targets(self, paths: [str]) -> DataFrame:
         pass
